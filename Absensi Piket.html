@@ -1,0 +1,1863 @@
+<!DOCTYPE html>
+<html lang="id">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Sistem Absensi & Infaq Guru Piket</title>
+    <!-- Tailwind CSS -->
+    <script src="https://cdn.tailwindcss.com"></script>
+    <!-- FontAwesome Icons -->
+    <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.4.0/css/all.min.css">
+    <!-- Google Fonts -->
+    <link rel="preconnect" href="https://fonts.googleapis.com">
+    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+    <link href="https://fonts.googleapis.com/css2?family=Plus+Jakarta+Sans:wght@300;400;500;600;700;800&display=swap" rel="stylesheet">
+    <!-- React & Babel CDNs for single file app -->
+    <script src="https://unpkg.com/react@18/umd/react.production.min.js"></script>
+    <script src="https://unpkg.com/react-dom@18/umd/react-dom.production.min.js"></script>
+    <script src="https://unpkg.com/@babel/standalone/babel.min.js"></script>
+
+    <script>
+        tailwind.config = {
+            theme: {
+                extend: {
+                    fontFamily: {
+                        sans: ['"Plus Jakarta Sans"', 'sans-serif'],
+                    },
+                    colors: {
+                        brand: {
+                            50: '#f0f9ff',
+                            100: '#e0f2fe',
+                            500: '#0284c7',
+                            600: '#0284c7',
+                            700: '#0369a1',
+                            800: '#075985',
+                            900: '#0c4a6e',
+                        }
+                    }
+                }
+            }
+        }
+    </script>
+    <style>
+        @media print {
+            body * {
+                visibility: hidden;
+            }
+            #printable-letter, #printable-letter * {
+                visibility: visible;
+            }
+            #printable-letter {
+                position: absolute;
+                left: 0;
+                top: 0;
+                width: 100%;
+                margin: 0;
+                padding: 20px;
+                background: white !important;
+                color: black !important;
+                box-shadow: none !important;
+            }
+            .no-print {
+                display: none !important;
+            }
+        }
+        .glass-card {
+            background: rgba(255, 255, 255, 0.95);
+            backdrop-filter: blur(10px);
+        }
+    </style>
+</head>
+<body class="bg-slate-100 text-slate-800 font-sans min-h-screen">
+
+    <div id="root"></div>
+
+    <script type="text/babel">
+        const { useState, useEffect, useMemo } = React;
+
+        // Default Time Schedule Configuration (Termasuk Sholat Dhuhur setelah Jam ke-4)
+        const DEFAULT_JAM_SLOTS = [
+            { id: '0', label: 'Jam ke-0', time: '06.45 - 07.15' },
+            { id: '1', label: 'Jam ke-1', time: '07.15 - 08.00' },
+            { id: '2', label: 'Jam ke-2', time: '08.00 - 08.45' },
+            { id: '3', label: 'Jam ke-3', time: '08.45 - 09.30' },
+            { id: '4', label: 'Jam ke-4', time: '09.45 - 10.30' },
+            { id: 'dhuhur', label: 'Sholat Dhuhur', time: '11.45 - 12.30', isDhuhur: true },
+            { id: '5', label: 'Jam ke-5', time: '12.30 - 13.15' },
+            { id: '6', label: 'Jam ke-6', time: '13.15 - 14.00' },
+            { id: '7', label: 'Jam ke-7', time: '14.00 - 14.45' },
+            { id: '8', label: 'Jam ke-8', time: '14.45 - 15.30' }
+        ];
+
+        // Helper functions for slot handling
+        const getSlotIndex = (id) => DEFAULT_JAM_SLOTS.findIndex(s => String(s.id) === String(id));
+
+        const getSlotsInRange = (startId, endId) => {
+            let sIdx = getSlotIndex(startId);
+            let eIdx = getSlotIndex(endId);
+            if (sIdx === -1) sIdx = 0;
+            if (eIdx === -1) eIdx = DEFAULT_JAM_SLOTS.length - 1;
+            if (sIdx > eIdx) [sIdx, eIdx] = [eIdx, sIdx];
+            return DEFAULT_JAM_SLOTS.slice(sIdx, eIdx + 1);
+        };
+
+        const getSlotLabel = (id) => {
+            const found = DEFAULT_JAM_SLOTS.find(s => String(s.id) === String(id));
+            return found ? found.label : `Jam ke-${id}`;
+        };
+
+        // Days list (Jumat diganti Ahad)
+        const DAYS_LIST = ['Senin', 'Selasa', 'Rabu', 'Kamis', 'Sabtu', 'Ahad'];
+
+        // Sample initial teacher data
+        const INITIAL_TEACHERS = [
+            {
+                id: 'T101',
+                nip: '198503152010011002',
+                name: 'Drs. Ahmad Dahlan, M.Pd.',
+                phone: '081234567890',
+                schedule: [
+                    { day: 'Sabtu', startPeriod: '0', endPeriod: '8' },
+                    { day: 'Senin', startPeriod: '0', endPeriod: '4' }
+                ]
+            },
+            {
+                id: 'T102',
+                nip: '199008212015032004',
+                name: 'Siti Aminah, S.Ag.',
+                phone: '082198765432',
+                schedule: [
+                    { day: 'Sabtu', startPeriod: '0', endPeriod: '8' },
+                    { day: 'Rabu', startPeriod: '1', endPeriod: '8' }
+                ]
+            },
+            {
+                id: 'T103',
+                nip: '198811122014021003',
+                name: 'Budi Santoso, S.T.',
+                phone: '085678901234',
+                schedule: [
+                    { day: 'Ahad', startPeriod: '0', endPeriod: '5' },
+                    { day: 'Kamis', startPeriod: '0', endPeriod: '8' }
+                ]
+            }
+        ];
+
+        function App() {
+            // Navigation & Main States
+            const [activeTab, setActiveTab] = useState('absensi'); // 'dashboard', 'absensi', 'guru', 'surat', 'pengaturan'
+            const [teachers, setTeachers] = useState(() => {
+                const saved = localStorage.getItem('piket_teachers');
+                return saved ? JSON.parse(saved) : INITIAL_TEACHERS;
+            });
+            const [infaqRate, setInfaqRate] = useState(() => {
+                const saved = localStorage.getItem('piket_infaq_rate');
+                return saved ? Number(saved) : 13000;
+            });
+            const [schoolInfo, setSchoolInfo] = useState(() => {
+                const saved = localStorage.getItem('piket_school_info');
+                return saved ? JSON.parse(saved) : {
+                    name: 'SMA NEGERI 1 UNGGULAN',
+                    address: 'Jl. Pendidikan No. 45, Kota Edukasi',
+                    phone: '(021) 555-0199 / email: info@sman1unggul.sch.id',
+                    principalName: 'Dr. H. M. Yusuf, M.M.',
+                    principalNip: '197105041998031005'
+                };
+            });
+
+            // Attendance records history
+            const [records, setRecords] = useState(() => {
+                const saved = localStorage.getItem('piket_records');
+                if (saved) return JSON.parse(saved);
+                return [
+                    {
+                        id: 'REC-001',
+                        date: '2026-10-03',
+                        dayName: 'Sabtu',
+                        teacherId: 'T101',
+                        teacherName: 'Drs. Ahmad Dahlan, M.Pd.',
+                        teacherNip: '198503152010011002',
+                        startPeriod: '0',
+                        endPeriod: '8',
+                        totalScheduled: 10,
+                        attendedPeriods: ['0', '1', '2', '3', '4'],
+                        missedPeriods: ['dhuhur', '5', '6', '7', '8'],
+                        totalAttended: 5,
+                        totalMissed: 5,
+                        infaqRate: 13000,
+                        totalInfaq: 65000,
+                        notes: 'Hadir 5 jam pertama, sisanya izin dinas luar'
+                    }
+                ];
+            });
+
+            // Toast feedback
+            const [toast, setToast] = useState(null);
+
+            // Selected record for letter viewing
+            const [selectedRecordForLetter, setSelectedRecordForLetter] = useState(null);
+
+            // Synchronize with browser LocalStorage
+            useEffect(() => {
+                localStorage.setItem('piket_teachers', JSON.stringify(teachers));
+            }, [teachers]);
+
+            useEffect(() => {
+                localStorage.setItem('piket_infaq_rate', JSON.stringify(infaqRate));
+            }, [infaqRate]);
+
+            useEffect(() => {
+                localStorage.setItem('piket_school_info', JSON.stringify(schoolInfo));
+            }, [schoolInfo]);
+
+            useEffect(() => {
+                localStorage.setItem('piket_records', JSON.stringify(records));
+            }, [records]);
+
+            const showNotification = (msg, type = 'success') => {
+                setToast({ msg, type });
+                setTimeout(() => setToast(null), 3500);
+            };
+
+            const formatRupiah = (number) => {
+                return new Intl.NumberFormat('id-ID', { style: 'currency', currency: 'IDR', maximumFractionDigits: 0 }).format(number);
+            };
+
+            return (
+                <div className="min-h-screen flex flex-col bg-slate-50">
+                    {/* Header Banner */}
+                    <header className="bg-slate-900 text-white shadow-lg sticky top-0 z-30 no-print">
+                        <div className="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8">
+                            <div className="flex items-center justify-between h-16">
+                                <div className="flex items-center space-x-3 cursor-pointer" onClick={() => setActiveTab('absensi')}>
+                                    <div className="w-10 h-10 rounded-xl bg-brand-500 flex items-center justify-center text-white shadow-md font-bold text-xl">
+                                        <i className="fa-solid fa-clipboard-user"></i>
+                                    </div>
+                                    <div>
+                                        <h1 className="text-lg font-bold leading-tight tracking-tight">SiPiket Guru</h1>
+                                        <p className="text-xs text-slate-400">Absensi Piket & Rekapitulasi Infaq</p>
+                                    </div>
+                                </div>
+
+                                <nav className="hidden md:flex space-x-1">
+                                    <NavButton icon="fa-chart-pie" label="Dashboard" active={activeTab === 'dashboard'} onClick={() => setActiveTab('dashboard')} />
+                                    <NavButton icon="fa-user-check" label="Absensi Harian" active={activeTab === 'absensi'} onClick={() => setActiveTab('absensi')} />
+                                    <NavButton icon="fa-users" label="Kelola Guru & Piket" active={activeTab === 'guru'} onClick={() => setActiveTab('guru')} />
+                                    <NavButton icon="fa-file-invoice" label="Surat Pemberitahuan" active={activeTab === 'surat'} onClick={() => setActiveTab('surat')} />
+                                    <NavButton icon="fa-sliders" label="Pengaturan Infaq" active={activeTab === 'pengaturan'} onClick={() => setActiveTab('pengaturan')} />
+                                </nav>
+
+                                <div className="flex items-center space-x-2">
+                                    <div className="bg-slate-800 px-3 py-1.5 rounded-lg border border-slate-700 text-xs flex items-center space-x-2">
+                                        <i className="fa-solid fa-coins text-amber-400"></i>
+                                        <span>Tarif Infaq: <strong className="text-amber-300">{formatRupiah(infaqRate)}/jam</strong></span>
+                                    </div>
+                                </div>
+                            </div>
+                        </div>
+
+                        {/* Mobile Navigation Bar */}
+                        <div className="md:hidden flex overflow-x-auto bg-slate-800 px-2 py-2 border-t border-slate-700 text-xs font-medium space-x-1">
+                            <MobileNavButton icon="fa-chart-pie" label="Dashboard" active={activeTab === 'dashboard'} onClick={() => setActiveTab('dashboard')} />
+                            <MobileNavButton icon="fa-user-check" label="Absensi" active={activeTab === 'absensi'} onClick={() => setActiveTab('absensi')} />
+                            <MobileNavButton icon="fa-users" label="Guru" active={activeTab === 'guru'} onClick={() => setActiveTab('guru')} />
+                            <MobileNavButton icon="fa-file-invoice" label="Surat" active={activeTab === 'surat'} onClick={() => setActiveTab('surat')} />
+                            <MobileNavButton icon="fa-sliders" label="Setting" active={activeTab === 'pengaturan'} onClick={() => setActiveTab('pengaturan')} />
+                        </div>
+                    </header>
+
+                    {/* Toast Notification */}
+                    {toast && (
+                        <div className={`fixed bottom-5 right-5 z-50 px-4 py-3 rounded-xl shadow-2xl text-white flex items-center space-x-3 transition-all duration-300 ${toast.type === 'error' ? 'bg-rose-600' : 'bg-emerald-600'}`}>
+                            <i className={`fa-solid ${toast.type === 'error' ? 'fa-circle-xmark' : 'fa-circle-check'} text-lg`}></i>
+                            <span className="font-medium text-sm">{toast.msg}</span>
+                        </div>
+                    )}
+
+                    {/* Main Content Area */}
+                    <main className="flex-1 max-w-7xl w-full mx-auto p-4 sm:p-6 lg:p-8">
+                        {activeTab === 'dashboard' && (
+                            <DashboardView 
+                                records={records} 
+                                teachers={teachers} 
+                                infaqRate={infaqRate}
+                                formatRupiah={formatRupiah} 
+                                onNavigate={setActiveTab}
+                                onSelectLetter={(rec) => {
+                                    setSelectedRecordForLetter(rec);
+                                    setActiveTab('surat');
+                                }}
+                            />
+                        )}
+
+                        {activeTab === 'absensi' && (
+                            <AbsensiView 
+                                teachers={teachers} 
+                                records={records} 
+                                setRecords={setRecords} 
+                                infaqRate={infaqRate} 
+                                formatRupiah={formatRupiah}
+                                showNotification={showNotification}
+                                onGenerateLetter={(rec) => {
+                                    setSelectedRecordForLetter(rec);
+                                    setActiveTab('surat');
+                                }}
+                            />
+                        )}
+
+                        {activeTab === 'guru' && (
+                            <GuruView 
+                                teachers={teachers} 
+                                setTeachers={setTeachers} 
+                                showNotification={showNotification}
+                            />
+                        )}
+
+                        {activeTab === 'surat' && (
+                            <SuratView 
+                                records={records}
+                                teachers={teachers}
+                                selectedRecord={selectedRecordForLetter}
+                                setSelectedRecord={setSelectedRecordForLetter}
+                                schoolInfo={schoolInfo}
+                                formatRupiah={formatRupiah}
+                            />
+                        )}
+
+                        {activeTab === 'pengaturan' && (
+                            <PengaturanView 
+                                infaqRate={infaqRate} 
+                                setInfaqRate={setInfaqRate}
+                                schoolInfo={schoolInfo}
+                                setSchoolInfo={setSchoolInfo}
+                                showNotification={showNotification}
+                                formatRupiah={formatRupiah}
+                            />
+                        )}
+                    </main>
+
+                    {/* Footer */}
+                    <footer className="bg-white border-t border-slate-200 py-4 text-center text-xs text-slate-500 no-print">
+                        <p>© 2026 Aplikasi Absensi Piket Guru & Infaq Ketidakhadiran - Disiplin & Amanah Sekolah</p>
+                    </footer>
+                </div>
+            );
+        }
+
+        /* Nav Buttons */
+        function NavButton({ icon, label, active, onClick }) {
+            return (
+                <button
+                    onClick={onClick}
+                    className={`px-3 py-2 rounded-lg text-sm font-medium transition-all duration-150 flex items-center space-x-2 ${
+                        active ? 'bg-brand-600 text-white shadow' : 'text-slate-300 hover:text-white hover:bg-slate-800'
+                    }`}
+                >
+                    <i className={`fa-solid ${icon}`}></i>
+                    <span>{label}</span>
+                </button>
+            );
+        }
+
+        function MobileNavButton({ icon, label, active, onClick }) {
+            return (
+                <button
+                    onClick={onClick}
+                    className={`px-3 py-1.5 rounded-md whitespace-nowrap flex items-center space-x-1.5 ${
+                        active ? 'bg-brand-600 text-white font-semibold' : 'text-slate-300 hover:bg-slate-700'
+                    }`}
+                >
+                    <i className={`fa-solid ${icon}`}></i>
+                    <span>{label}</span>
+                </button>
+            );
+        }
+
+        function DashboardView({ records, teachers, infaqRate, formatRupiah, onNavigate, onSelectLetter }) {
+            const totalInfaqCollected = records.reduce((sum, r) => sum + (r.totalInfaq || 0), 0);
+            const totalMissedHours = records.reduce((sum, r) => sum + (r.totalMissed || 0), 0);
+            const totalDutyEntries = records.length;
+
+            return (
+                <div className="space-y-6">
+                    {/* Welcome Banner */}
+                    <div className="bg-gradient-to-r from-slate-900 via-brand-900 to-slate-900 text-white rounded-2xl p-6 sm:p-8 shadow-xl relative overflow-hidden">
+                        <div className="absolute right-0 top-0 translate-x-1/4 -translate-y-1/4 w-72 h-72 bg-brand-500/20 rounded-full blur-3xl pointer-events-none"></div>
+                        <div className="relative z-10 max-w-2xl">
+                            <span className="bg-brand-500/30 text-brand-200 border border-brand-400/30 text-xs px-3 py-1 rounded-full font-semibold uppercase tracking-wider inline-block mb-3">
+                                Dashboard SiPiket
+                            </span>
+                            <h2 className="text-2xl sm:text-3xl font-extrabold tracking-tight">Sistem Absensi Guru Piket & Infaq</h2>
+                            <p className="mt-2 text-slate-300 text-sm leading-relaxed">
+                                Pantau keterlibatan jadwal piket, catat presensi jam ke-0 s.d. jam ke-8 (termasuk Sholat Dhuhur), serta terbitkan surat pemberitahuan rincian infaq ketidakhadiran secara otomatis.
+                            </p>
+                            <div className="mt-5 flex flex-wrap gap-3">
+                                <button 
+                                    onClick={() => onNavigate('absensi')}
+                                    className="bg-brand-500 hover:bg-brand-600 text-white font-semibold px-4 py-2.5 rounded-xl shadow-lg transition flex items-center space-x-2 text-sm"
+                                >
+                                    <i className="fa-solid fa-plus-circle"></i>
+                                    <span>Input Absensi Hari Ini</span>
+                                </button>
+                                <button 
+                                    onClick={() => onNavigate('guru')}
+                                    className="bg-slate-800 hover:bg-slate-700 text-slate-200 border border-slate-700 font-semibold px-4 py-2.5 rounded-xl transition flex items-center space-x-2 text-sm"
+                                >
+                                    <i className="fa-solid fa-user-plus"></i>
+                                    <span>Tambah Guru Piket</span>
+                                </button>
+                            </div>
+                        </div>
+                    </div>
+
+                    {/* Stats Grid */}
+                    <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-4">
+                        <div className="bg-white p-5 rounded-2xl border border-slate-200 shadow-sm flex items-center space-x-4">
+                            <div className="w-12 h-12 rounded-xl bg-amber-100 text-amber-600 flex items-center justify-center text-xl font-bold">
+                                <i className="fa-solid fa-hand-holding-dollar"></i>
+                            </div>
+                            <div>
+                                <p className="text-xs text-slate-500 font-medium">Total Akumulasi Infaq</p>
+                                <h3 className="text-xl font-bold text-slate-800">{formatRupiah(totalInfaqCollected)}</h3>
+                                <p className="text-[11px] text-amber-600 font-medium mt-0.5">Dari {totalMissedHours} jam kosong piket</p>
+                            </div>
+                        </div>
+
+                        <div className="bg-white p-5 rounded-2xl border border-slate-200 shadow-sm flex items-center space-x-4">
+                            <div className="w-12 h-12 rounded-xl bg-indigo-100 text-indigo-600 flex items-center justify-center text-xl font-bold">
+                                <i className="fa-solid fa-user-tie"></i>
+                            </div>
+                            <div>
+                                <p className="text-xs text-slate-500 font-medium">Guru Terdaftar Piket</p>
+                                <h3 className="text-xl font-bold text-slate-800">{teachers.length} Guru</h3>
+                                <p className="text-[11px] text-slate-500 mt-0.5">Tersimpan di database</p>
+                            </div>
+                        </div>
+
+                        <div className="bg-white p-5 rounded-2xl border border-slate-200 shadow-sm flex items-center space-x-4">
+                            <div className="w-12 h-12 rounded-xl bg-emerald-100 text-emerald-600 flex items-center justify-center text-xl font-bold">
+                                <i className="fa-solid fa-clock"></i>
+                            </div>
+                            <div>
+                                <p className="text-xs text-slate-500 font-medium">Tarif Infaq per Jam</p>
+                                <h3 className="text-xl font-bold text-slate-800">{formatRupiah(infaqRate)}</h3>
+                                <p className="text-[11px] text-emerald-600 font-medium mt-0.5">Berlaku per jam ketidakhadiran</p>
+                            </div>
+                        </div>
+
+                        <div className="bg-white p-5 rounded-2xl border border-slate-200 shadow-sm flex items-center space-x-4">
+                            <div className="w-12 h-12 rounded-xl bg-sky-100 text-sky-600 flex items-center justify-center text-xl font-bold">
+                                <i className="fa-solid fa-list-check"></i>
+                            </div>
+                            <div>
+                                <p className="text-xs text-slate-500 font-medium">Total Rekap Terdaftar</p>
+                                <h3 className="text-xl font-bold text-slate-800">{totalDutyEntries} Rekap</h3>
+                                <p className="text-[11px] text-slate-500 mt-0.5">Catatan absensi piket</p>
+                            </div>
+                        </div>
+                    </div>
+
+                    {/* Recent Records Table */}
+                    <div className="bg-white rounded-2xl border border-slate-200 shadow-sm overflow-hidden">
+                        <div className="p-5 border-b border-slate-100 flex items-center justify-between">
+                            <div>
+                                <h3 className="font-bold text-slate-800 text-base">Riwayat Rekapitulasi Kehadiran Terbaru</h3>
+                                <p className="text-xs text-slate-500">Daftar kehadiran & perhitungan infaq guru piket</p>
+                            </div>
+                            <button 
+                                onClick={() => onNavigate('absensi')}
+                                className="text-xs text-brand-600 hover:text-brand-700 font-semibold flex items-center space-x-1"
+                            >
+                                <span>Kelola Absensi</span>
+                                <i className="fa-solid fa-arrow-right"></i>
+                            </button>
+                        </div>
+
+                        {records.length === 0 ? (
+                            <div className="p-8 text-center text-slate-400">
+                                <i className="fa-solid fa-folder-open text-4xl mb-2 text-slate-300"></i>
+                                <p className="text-sm">Belum ada riwayat absensi piket yang dicatat.</p>
+                            </div>
+                        ) : (
+                            <div className="overflow-x-auto">
+                                <table className="w-full text-left text-sm">
+                                    <thead className="bg-slate-50 text-slate-500 text-xs uppercase font-semibold border-b border-slate-200">
+                                        <tr>
+                                            <th className="px-5 py-3">Tanggal & Hari</th>
+                                            <th className="px-5 py-3">Nama Guru</th>
+                                            <th className="px-5 py-3">Jadwal Jam</th>
+                                            <th className="px-5 py-3 text-center">Kehadiran</th>
+                                            <th className="px-5 py-3 text-right">Perhitungan Infaq</th>
+                                            <th className="px-5 py-3 text-center">Aksi</th>
+                                        </tr>
+                                    </thead>
+                                    <tbody className="divide-y divide-slate-100">
+                                        {records.map((rec) => (
+                                            <tr key={rec.id} className="hover:bg-slate-50 transition">
+                                                <td className="px-5 py-3.5 whitespace-nowrap">
+                                                    <div className="font-medium text-slate-800">{rec.dayName}, {rec.date}</div>
+                                                    <div className="text-[11px] text-slate-400">ID: {rec.id}</div>
+                                                </td>
+                                                <td className="px-5 py-3.5">
+                                                    <div className="font-semibold text-slate-800">{rec.teacherName}</div>
+                                                    <div className="text-xs text-slate-500">NIP: {rec.teacherNip || '-'}</div>
+                                                </td>
+                                                <td className="px-5 py-3.5 whitespace-nowrap">
+                                                    <span className="bg-slate-100 text-slate-700 text-xs px-2.5 py-1 rounded-md font-mono border border-slate-200">
+                                                        {getSlotLabel(rec.startPeriod)} s/d {getSlotLabel(rec.endPeriod)} ({rec.totalScheduled} Jam)
+                                                    </span>
+                                                </td>
+                                                <td className="px-5 py-3.5 text-center">
+                                                    {rec.totalMissed === 0 ? (
+                                                        <span className="inline-flex items-center px-2.5 py-0.5 rounded-full text-xs font-semibold bg-emerald-100 text-emerald-800">
+                                                            <i className="fa-solid fa-check-circle mr-1"></i> Hadir Lengkap ({rec.totalAttended} jam)
+                                                        </span>
+                                                    ) : rec.totalAttended === 0 ? (
+                                                        <span className="inline-flex items-center px-2.5 py-0.5 rounded-full text-xs font-semibold bg-rose-100 text-rose-800">
+                                                            <i className="fa-solid fa-times-circle mr-1"></i> Tidak Hadir Full
+                                                        </span>
+                                                    ) : (
+                                                        <span className="inline-flex items-center px-2.5 py-0.5 rounded-full text-xs font-semibold bg-amber-100 text-amber-800">
+                                                            <i className="fa-solid fa-clock-rotate-left mr-1"></i> Hadir {rec.totalAttended} jam / Kosong {rec.totalMissed} jam
+                                                        </span>
+                                                    )}
+                                                </td>
+                                                <td className="px-5 py-3.5 text-right font-medium">
+                                                    {rec.totalInfaq > 0 ? (
+                                                        <div>
+                                                            <div className="text-rose-600 font-bold">{formatRupiah(rec.totalInfaq)}</div>
+                                                            <div className="text-[11px] text-slate-400">{rec.totalMissed} jam x {formatRupiah(rec.infaqRate)}</div>
+                                                        </div>
+                                                    ) : (
+                                                        <span className="text-emerald-600 text-xs font-semibold">Rp 0 (Nihil)</span>
+                                                    )}
+                                                </td>
+                                                <td className="px-5 py-3.5 text-center">
+                                                    <button
+                                                        onClick={() => onSelectLetter(rec)}
+                                                        className="bg-brand-50 hover:bg-brand-100 text-brand-700 border border-brand-200 px-3 py-1.5 rounded-lg text-xs font-semibold transition inline-flex items-center space-x-1"
+                                                    >
+                                                        <i className="fa-solid fa-print"></i>
+                                                        <span>Cetak Surat</span>
+                                                    </button>
+                                                </td>
+                                            </tr>
+                                        ))}
+                                    </tbody>
+                                </table>
+                            </div>
+                        )}
+                    </div>
+                </div>
+            );
+        }
+
+        function AbsensiView({ teachers, records, setRecords, infaqRate, formatRupiah, showNotification, onGenerateLetter }) {
+            const [selectedDate, setSelectedDate] = useState(() => new Date().toISOString().split('T')[0]);
+            
+            // Map date to Indonesian day name (Sunday = Ahad)
+            const getDayNameFromDate = (dateString) => {
+                const dateObj = new Date(dateString);
+                const days = ['Ahad', 'Senin', 'Selasa', 'Rabu', 'Kamis', 'Jumat', 'Sabtu'];
+                return days[dateObj.getDay()];
+            };
+
+            const dayName = getDayNameFromDate(selectedDate);
+
+            // Teachers scheduled for the selected day
+            const scheduledTeachers = useMemo(() => {
+                return teachers.filter(t => t.schedule.some(s => s.day === dayName));
+            }, [teachers, dayName]);
+
+            // Form state for matrix
+            const [attendanceMatrix, setAttendanceMatrix] = useState({});
+
+            // Initialize or update attendance matrix
+            useEffect(() => {
+                const initial = {};
+                scheduledTeachers.forEach(t => {
+                    const sch = t.schedule.find(s => s.day === dayName) || { startPeriod: '0', endPeriod: '8' };
+                    const existing = records.find(r => r.date === selectedDate && r.teacherId === t.id);
+                    if (existing) {
+                        initial[t.id] = {
+                            startPeriod: existing.startPeriod,
+                            endPeriod: existing.endPeriod,
+                            attendedPeriods: existing.attendedPeriods || [],
+                            notes: existing.notes || ''
+                        };
+                    } else {
+                        const slots = getSlotsInRange(sch.startPeriod, sch.endPeriod);
+                        const allIds = slots.map(s => String(s.id));
+                        initial[t.id] = {
+                            startPeriod: String(sch.startPeriod),
+                            endPeriod: String(sch.endPeriod),
+                            attendedPeriods: allIds,
+                            notes: ''
+                        };
+                    }
+                });
+                setAttendanceMatrix(initial);
+            }, [selectedDate, dayName, teachers]);
+
+            const handleTogglePeriod = (teacherId, periodId) => {
+                const pStr = String(periodId);
+                setAttendanceMatrix(prev => {
+                    const currentObj = prev[teacherId] || { startPeriod: '0', endPeriod: '8', attendedPeriods: [] };
+                    const currentAttended = currentObj.attendedPeriods || [];
+                    let updatedAttended;
+
+                    if (currentAttended.includes(pStr)) {
+                        updatedAttended = currentAttended.filter(p => p !== pStr);
+                    } else {
+                        updatedAttended = [...currentAttended, pStr];
+                    }
+
+                    return {
+                        ...prev,
+                        [teacherId]: {
+                            ...currentObj,
+                            attendedPeriods: updatedAttended
+                        }
+                    };
+                });
+            };
+
+            const handleToggleAllForTeacher = (teacherId, markAllAttended) => {
+                setAttendanceMatrix(prev => {
+                    const currentObj = prev[teacherId];
+                    if (!currentObj) return prev;
+
+                    let updatedAttended = [];
+                    if (markAllAttended) {
+                        const range = getSlotsInRange(currentObj.startPeriod, currentObj.endPeriod);
+                        updatedAttended = range.map(s => String(s.id));
+                    }
+
+                    return {
+                        ...prev,
+                        [teacherId]: {
+                            ...currentObj,
+                            attendedPeriods: updatedAttended
+                        }
+                    };
+                });
+            };
+
+            const handlePeriodChange = (teacherId, field, value) => {
+                const valStr = String(value);
+                setAttendanceMatrix(prev => {
+                    const currentObj = prev[teacherId] || { startPeriod: '0', endPeriod: '8', attendedPeriods: [] };
+                    let newStart = field === 'startPeriod' ? valStr : currentObj.startPeriod;
+                    let newEnd = field === 'endPeriod' ? valStr : currentObj.endPeriod;
+
+                    let sIdx = getSlotIndex(newStart);
+                    let eIdx = getSlotIndex(newEnd);
+
+                    if (sIdx > eIdx) {
+                        if (field === 'startPeriod') newEnd = newStart;
+                        else newStart = newEnd;
+                    }
+
+                    const activeSlots = getSlotsInRange(newStart, newEnd).map(s => String(s.id));
+                    const updatedAttended = currentObj.attendedPeriods.filter(p => activeSlots.includes(p));
+
+                    return {
+                        ...prev,
+                        [teacherId]: {
+                            ...currentObj,
+                            startPeriod: newStart,
+                            endPeriod: newEnd,
+                            attendedPeriods: updatedAttended
+                        }
+                    };
+                });
+            };
+
+            const handleNotesChange = (teacherId, notesVal) => {
+                setAttendanceMatrix(prev => ({
+                    ...prev,
+                    [teacherId]: {
+                        ...prev[teacherId],
+                        notes: notesVal
+                    }
+                }));
+            };
+
+            const handleSaveTeacherAbsensi = (teacher) => {
+                const matrixData = attendanceMatrix[teacher.id];
+                if (!matrixData) return;
+
+                const { startPeriod, endPeriod, attendedPeriods, notes } = matrixData;
+                
+                const scheduledSlots = getSlotsInRange(startPeriod, endPeriod);
+                const scheduledIds = scheduledSlots.map(s => String(s.id));
+
+                const missedPeriods = scheduledIds.filter(id => !attendedPeriods.includes(id));
+                const totalScheduled = scheduledIds.length;
+                const totalAttended = attendedPeriods.filter(id => scheduledIds.includes(id)).length;
+                const totalMissed = missedPeriods.length;
+                const totalInfaq = totalMissed * infaqRate;
+
+                const newRecord = {
+                    id: `REC-${Date.now().toString().slice(-6)}`,
+                    date: selectedDate,
+                    dayName: dayName,
+                    teacherId: teacher.id,
+                    teacherName: teacher.name,
+                    teacherNip: teacher.nip,
+                    startPeriod,
+                    endPeriod,
+                    totalScheduled,
+                    attendedPeriods: attendedPeriods.filter(id => scheduledIds.includes(id)),
+                    missedPeriods,
+                    totalAttended,
+                    totalMissed,
+                    infaqRate,
+                    totalInfaq,
+                    notes: notes || ''
+                };
+
+                setRecords(prev => {
+                    const filtered = prev.filter(r => !(r.date === selectedDate && r.teacherId === teacher.id));
+                    return [newRecord, ...filtered];
+                });
+
+                showNotification(`Absensi piket ${teacher.name} berhasil disimpan!`);
+            };
+
+            return (
+                <div className="space-y-6">
+                    {/* Top Control Header */}
+                    <div className="bg-white p-5 rounded-2xl border border-slate-200 shadow-sm flex flex-col md:flex-row items-start md:items-center justify-between gap-4">
+                        <div>
+                            <h2 className="text-xl font-bold text-slate-800">Entri Absensi Guru Piket</h2>
+                            <p className="text-xs text-slate-500 mt-0.5">Pilih tanggal untuk mencatat atau memperbarui presensi jam piket (Termasuk Sholat Dhuhur)</p>
+                        </div>
+
+                        <div className="flex items-center space-x-3 w-full md:w-auto">
+                            <div className="relative flex-1 md:w-64">
+                                <label className="block text-[11px] font-bold text-slate-500 uppercase tracking-wider mb-1">Tanggal Absensi</label>
+                                <div className="relative">
+                                    <input 
+                                        type="date"
+                                        value={selectedDate}
+                                        onChange={(e) => setSelectedDate(e.target.value)}
+                                        className="w-full pl-10 pr-4 py-2 border border-slate-300 rounded-xl text-sm font-semibold focus:outline-none focus:ring-2 focus:ring-brand-500 bg-slate-50"
+                                    />
+                                    <i className="fa-solid fa-calendar-day absolute left-3.5 top-3 text-slate-400"></i>
+                                </div>
+                            </div>
+                            <div className="bg-brand-50 border border-brand-200 px-4 py-2 rounded-xl text-center">
+                                <span className="block text-[10px] text-brand-600 uppercase font-bold">Hari Tugas</span>
+                                <span className="text-base font-extrabold text-brand-900">{dayName}</span>
+                            </div>
+                        </div>
+                    </div>
+
+                    {/* Teacher List Matrix */}
+                    {scheduledTeachers.length === 0 ? (
+                        <div className="bg-white rounded-2xl border border-slate-200 p-12 text-center">
+                            <div className="w-16 h-16 bg-amber-50 rounded-full flex items-center justify-center text-amber-500 text-2xl mx-auto mb-3">
+                                <i className="fa-solid fa-calendar-xmark"></i>
+                            </div>
+                            <h3 className="text-base font-bold text-slate-700">Tidak Ada Guru Piket Terjadwal</h3>
+                            <p className="text-xs text-slate-500 max-w-md mx-auto mt-1">
+                                Tidak ada jadwal piket yang disetting untuk hari <strong className="text-slate-700">{dayName}</strong>. 
+                                Anda dapat menambahkan atau memperbarui jadwal di menu "Kelola Guru & Piket".
+                            </p>
+                        </div>
+                    ) : (
+                        <div className="space-y-5">
+                            {scheduledTeachers.map((teacher) => {
+                                const teacherState = attendanceMatrix[teacher.id] || { startPeriod: '0', endPeriod: '8', attendedPeriods: [], notes: '' };
+                                const startP = teacherState.startPeriod;
+                                const endP = teacherState.endPeriod;
+                                
+                                const scheduledList = getSlotsInRange(startP, endP);
+                                const scheduledIds = scheduledList.map(s => String(s.id));
+
+                                const attendedCount = teacherState.attendedPeriods.filter(id => scheduledIds.includes(id)).length;
+                                const missedCount = scheduledList.length - attendedCount;
+                                const calculatedInfaq = missedCount * infaqRate;
+
+                                const existingRecord = records.find(r => r.date === selectedDate && r.teacherId === teacher.id);
+
+                                return (
+                                    <div key={teacher.id} className="bg-white rounded-2xl border border-slate-200 shadow-sm overflow-hidden transition hover:shadow-md">
+                                        <div className="p-4 sm:p-5 bg-slate-50 border-b border-slate-200 flex flex-col md:flex-row md:items-center justify-between gap-3">
+                                            <div className="flex items-center space-x-3">
+                                                <div className="w-11 h-11 rounded-full bg-slate-800 text-white font-bold flex items-center justify-center text-base shadow">
+                                                    {teacher.name.charAt(0)}
+                                                </div>
+                                                <div>
+                                                    <div className="flex items-center space-x-2">
+                                                        <h3 className="font-bold text-slate-800 text-base">{teacher.name}</h3>
+                                                        {existingRecord && (
+                                                            <span className="bg-emerald-100 text-emerald-700 border border-emerald-200 text-[10px] font-bold px-2 py-0.5 rounded-full">
+                                                                Tersimpan
+                                                            </span>
+                                                        )}
+                                                    </div>
+                                                    <p className="text-xs text-slate-500">NIP: {teacher.nip || '-'} | No. HP: {teacher.phone || '-'}</p>
+                                                </div>
+                                            </div>
+
+                                            <div className="flex flex-wrap items-center gap-3 bg-white p-2 rounded-xl border border-slate-200">
+                                                <div className="flex items-center space-x-1.5 text-xs">
+                                                    <span className="text-slate-500 font-semibold">Tugas Jam:</span>
+                                                    <select 
+                                                        value={startP} 
+                                                        onChange={(e) => handlePeriodChange(teacher.id, 'startPeriod', e.target.value)}
+                                                        className="border border-slate-300 rounded-lg px-2 py-1 font-bold text-slate-800 bg-slate-50"
+                                                    >
+                                                        {DEFAULT_JAM_SLOTS.map(j => (
+                                                            <option key={j.id} value={j.id}>{j.label}</option>
+                                                        ))}
+                                                    </select>
+                                                    <span className="text-slate-400">s/d</span>
+                                                    <select 
+                                                        value={endP} 
+                                                        onChange={(e) => handlePeriodChange(teacher.id, 'endPeriod', e.target.value)}
+                                                        className="border border-slate-300 rounded-lg px-2 py-1 font-bold text-slate-800 bg-slate-50"
+                                                    >
+                                                        {DEFAULT_JAM_SLOTS.map(j => (
+                                                            <option key={j.id} value={j.id}>{j.label}</option>
+                                                        ))}
+                                                    </select>
+                                                </div>
+
+                                                <div className="h-4 w-px bg-slate-200 hidden sm:block"></div>
+
+                                                <div className="flex space-x-1">
+                                                    <button 
+                                                        onClick={() => handleToggleAllForTeacher(teacher.id, true)}
+                                                        className="text-[11px] bg-emerald-50 text-emerald-700 hover:bg-emerald-100 px-2 py-1 rounded-md font-semibold transition"
+                                                    >
+                                                        <i className="fa-solid fa-check-double mr-1"></i>Hadir Semua
+                                                    </button>
+                                                    <button 
+                                                        onClick={() => handleToggleAllForTeacher(teacher.id, false)}
+                                                        className="text-[11px] bg-rose-50 text-rose-700 hover:bg-rose-100 px-2 py-1 rounded-md font-semibold transition"
+                                                    >
+                                                        <i className="fa-solid fa-times mr-1"></i>Kosong Semua
+                                                    </button>
+                                                </div>
+                                            </div>
+                                        </div>
+
+                                        <div className="p-4 sm:p-5">
+                                            <label className="block text-xs font-bold text-slate-500 uppercase tracking-wider mb-3">
+                                                Centang Kehadiran Jam Tugas (Termasuk Sholat Dhuhur):
+                                            </label>
+
+                                            <div className="grid grid-cols-2 sm:grid-cols-5 md:grid-cols-10 gap-2">
+                                                {DEFAULT_JAM_SLOTS.map(slot => {
+                                                    const isScheduled = scheduledIds.includes(String(slot.id));
+                                                    const isAttended = teacherState.attendedPeriods.includes(String(slot.id));
+
+                                                    if (!isScheduled) {
+                                                        return (
+                                                            <div key={slot.id} className="bg-slate-100/60 border border-slate-200/60 rounded-xl p-2.5 text-center opacity-40 select-none">
+                                                                <span className="block text-xs font-bold text-slate-400">{slot.label}</span>
+                                                                <span className="block text-[10px] text-slate-400 mt-0.5">Non-Tugas</span>
+                                                            </div>
+                                                        );
+                                                    }
+
+                                                    return (
+                                                        <button
+                                                            key={slot.id}
+                                                            type="button"
+                                                            onClick={() => handleTogglePeriod(teacher.id, slot.id)}
+                                                            className={`rounded-xl p-2.5 text-center transition-all duration-200 border cursor-pointer select-none relative ${
+                                                                slot.isDhuhur ? 'ring-2 ring-amber-400/80 ' : ''
+                                                            } ${
+                                                                isAttended 
+                                                                    ? 'bg-emerald-50 border-emerald-500 text-emerald-900 shadow-sm ring-1 ring-emerald-500' 
+                                                                    : 'bg-rose-50 border-rose-300 text-rose-900 hover:border-rose-400'
+                                                            }`}
+                                                        >
+                                                            <div className="flex items-center justify-between">
+                                                                <span className="text-[9px] font-bold uppercase tracking-tight text-slate-500">{slot.time}</span>
+                                                                <i className={`fa-solid text-xs ${isAttended ? 'fa-check text-emerald-600' : 'fa-xmark text-rose-500'}`}></i>
+                                                            </div>
+                                                            <div className={`text-xs font-extrabold mt-1 ${slot.isDhuhur ? 'text-amber-800' : ''}`}>
+                                                                {slot.isDhuhur && <i className="fa-solid fa-mosque mr-1 text-amber-600"></i>}
+                                                                {slot.label}
+                                                            </div>
+                                                            <div className={`text-[10px] font-bold mt-1 px-1.5 py-0.5 rounded ${isAttended ? 'bg-emerald-200/70 text-emerald-800' : 'bg-rose-200/70 text-rose-800'}`}>
+                                                                {isAttended ? 'HADIR' : 'KOSONG'}
+                                                            </div>
+                                                        </button>
+                                                    );
+                                                })}
+                                            </div>
+
+                                            <div className="mt-5 bg-slate-50 rounded-xl p-4 border border-slate-200 flex flex-col md:flex-row items-stretch md:items-center justify-between gap-4">
+                                                <div className="grid grid-cols-2 sm:grid-cols-4 gap-3 text-center md:text-left flex-1">
+                                                    <div>
+                                                        <span className="text-[11px] text-slate-400 font-medium">Total Jadwal</span>
+                                                        <p className="text-sm font-bold text-slate-800">{scheduledList.length} Slot Jam</p>
+                                                    </div>
+                                                    <div>
+                                                        <span className="text-[11px] text-slate-400 font-medium">Jumlah Hadir</span>
+                                                        <p className="text-sm font-bold text-emerald-600">{attendedCount} Slot</p>
+                                                    </div>
+                                                    <div>
+                                                        <span className="text-[11px] text-slate-400 font-medium">Tidak Hadir (Kosong)</span>
+                                                        <p className="text-sm font-bold text-rose-600">{missedCount} Slot</p>
+                                                    </div>
+                                                    <div>
+                                                        <span className="text-[11px] text-slate-400 font-medium">Kewajiban Infaq</span>
+                                                        <p className="text-sm font-extrabold text-amber-600">{formatRupiah(calculatedInfaq)}</p>
+                                                    </div>
+                                                </div>
+
+                                                <div className="flex-1 min-w-[200px]">
+                                                    <input 
+                                                        type="text" 
+                                                        placeholder="Catatan / Alasan (Opsional)..." 
+                                                        value={teacherState.notes}
+                                                        onChange={(e) => handleNotesChange(teacher.id, e.target.value)}
+                                                        className="w-full px-3 py-2 text-xs border border-slate-300 rounded-lg bg-white focus:outline-none focus:ring-2 focus:ring-brand-500"
+                                                    />
+                                                </div>
+
+                                                <div className="flex items-center space-x-2">
+                                                    <button
+                                                        onClick={() => handleSaveTeacherAbsensi(teacher)}
+                                                        className="bg-brand-600 hover:bg-brand-700 text-white font-bold px-4 py-2.5 rounded-xl shadow text-xs transition flex items-center space-x-1.5"
+                                                    >
+                                                        <i className="fa-solid fa-floppy-disk"></i>
+                                                        <span>Simpan Absensi</span>
+                                                    </button>
+
+                                                    {existingRecord && (
+                                                        <button
+                                                            onClick={() => onGenerateLetter(existingRecord)}
+                                                            className="bg-slate-800 hover:bg-slate-900 text-white font-bold px-3 py-2.5 rounded-xl text-xs transition flex items-center space-x-1"
+                                                            title="Cetak Surat Pemberitahuan"
+                                                        >
+                                                            <i className="fa-solid fa-print"></i>
+                                                            <span className="hidden sm:inline">Surat</span>
+                                                        </button>
+                                                    )}
+                                                </div>
+                                            </div>
+                                        </div>
+                                    </div>
+                                );
+                            })}
+                        </div>
+                    )}
+                </div>
+            );
+        }
+
+        function GuruView({ teachers, setTeachers, showNotification }) {
+            const [showModal, setShowModal] = useState(false);
+            const [showUploadModal, setShowUploadModal] = useState(false);
+            const [deletingTeacher, setDeletingTeacher] = useState(null);
+            const [editingTeacher, setEditingTeacher] = useState(null);
+
+            // Single teacher form state
+            const [formName, setFormName] = useState('');
+            const [formNip, setFormNip] = useState('');
+            const [formPhone, setFormPhone] = useState('');
+            const [formSchedule, setFormSchedule] = useState([
+                { day: 'Sabtu', startPeriod: '0', endPeriod: '8' }
+            ]);
+
+            // Batch text upload state
+            const [batchText, setBatchText] = useState('');
+
+            const openAddModal = () => {
+                setEditingTeacher(null);
+                setFormName('');
+                setFormNip('');
+                setFormPhone('');
+                setFormSchedule([{ day: 'Sabtu', startPeriod: '0', endPeriod: '8' }]);
+                setShowModal(true);
+            };
+
+            const openEditModal = (t) => {
+                setEditingTeacher(t);
+                setFormName(t.name);
+                setFormNip(t.nip || '');
+                setFormPhone(t.phone || '');
+                setFormSchedule(t.schedule.length > 0 ? t.schedule : [{ day: 'Sabtu', startPeriod: '0', endPeriod: '8' }]);
+                setShowModal(true);
+            };
+
+            const handleAddDaySchedule = () => {
+                setFormSchedule([...formSchedule, { day: 'Senin', startPeriod: '0', endPeriod: '8' }]);
+            };
+
+            const handleRemoveDaySchedule = (idx) => {
+                setFormSchedule(formSchedule.filter((_, i) => i !== idx));
+            };
+
+            const handleScheduleChange = (idx, field, val) => {
+                const updated = [...formSchedule];
+                updated[idx][field] = String(val);
+                setFormSchedule(updated);
+            };
+
+            const handleSaveTeacher = (e) => {
+                e.preventDefault();
+                if (!formName.trim()) {
+                    showNotification('Nama guru tidak boleh kosong!', 'error');
+                    return;
+                }
+
+                if (editingTeacher) {
+                    setTeachers(teachers.map(t => t.id === editingTeacher.id ? {
+                        ...t,
+                        name: formName,
+                        nip: formNip,
+                        phone: formPhone,
+                        schedule: formSchedule
+                    } : t));
+                    showNotification('Data guru berhasil diperbarui');
+                } else {
+                    const newT = {
+                        id: `T${Date.now().toString().slice(-4)}`,
+                        name: formName,
+                        nip: formNip,
+                        phone: formPhone,
+                        schedule: formSchedule
+                    };
+                    setTeachers([...teachers, newT]);
+                    showNotification('Guru piket baru berhasil ditambahkan');
+                }
+                setShowModal(false);
+            };
+
+            const confirmDeleteTeacher = () => {
+                if (!deletingTeacher) return;
+                setTeachers(teachers.filter(t => t.id !== deletingTeacher.id));
+                showNotification(`Data guru ${deletingTeacher.name} berhasil dihapus`);
+                setDeletingTeacher(null);
+            };
+
+            const handleProcessBatchUpload = () => {
+                if (!batchText.trim()) {
+                    showNotification('Teks import batch tidak boleh kosong', 'error');
+                    return;
+                }
+
+                const lines = batchText.split('\n');
+                const newAdded = [];
+
+                lines.forEach((line, i) => {
+                    if (!line.trim()) return;
+                    const parts = line.split(',').map(p => p.trim());
+                    if (parts.length >= 1) {
+                        const name = parts[0];
+                        const nip = parts[1] || '';
+                        const phone = parts[2] || '';
+                        const day = parts[3] || 'Sabtu';
+                        const startPeriod = parts[4] !== undefined ? String(parts[4]) : '0';
+                        const endPeriod = parts[5] !== undefined ? String(parts[5]) : '8';
+
+                        newAdded.push({
+                            id: `TBATCH-${Date.now()}-${i}`,
+                            name,
+                            nip,
+                            phone,
+                            schedule: [{ day, startPeriod, endPeriod }]
+                        });
+                    }
+                });
+
+                if (newAdded.length > 0) {
+                    setTeachers(prev => [...prev, ...newAdded]);
+                    showNotification(`Berhasil mengimpor ${newAdded.length} data guru piket!`);
+                    setShowUploadModal(false);
+                    setBatchText('');
+                } else {
+                    showNotification('Format data tidak terdeteksi!', 'error');
+                }
+            };
+
+            return (
+                <div className="space-y-6">
+                    {/* Header */}
+                    <div className="bg-white p-5 rounded-2xl border border-slate-200 shadow-sm flex flex-col sm:flex-row items-start sm:items-center justify-between gap-4">
+                        <div>
+                            <h2 className="text-xl font-bold text-slate-800">Manajemen Guru Piket & Jadwal</h2>
+                            <p className="text-xs text-slate-500 mt-0.5">Kelola daftar guru piket beserta alokasi hari piket dan rentang jam tugas</p>
+                        </div>
+
+                        <div className="flex items-center space-x-2">
+                            <button
+                                onClick={() => setShowUploadModal(true)}
+                                className="bg-emerald-50 hover:bg-emerald-100 text-emerald-700 border border-emerald-300 font-semibold px-3 py-2 rounded-xl text-xs transition flex items-center space-x-1.5"
+                            >
+                                <i className="fa-solid fa-file-import"></i>
+                                <span>Upload Batch CSV / Teks</span>
+                            </button>
+                            <button
+                                onClick={openAddModal}
+                                className="bg-brand-600 hover:bg-brand-700 text-white font-bold px-4 py-2 rounded-xl text-xs shadow transition flex items-center space-x-1.5"
+                            >
+                                <i className="fa-solid fa-plus"></i>
+                                <span>Tambah Guru</span>
+                            </button>
+                        </div>
+                    </div>
+
+                    {/* Teacher List Table */}
+                    <div className="bg-white rounded-2xl border border-slate-200 shadow-sm overflow-hidden">
+                        <div className="overflow-x-auto">
+                            <table className="w-full text-left text-sm">
+                                <thead className="bg-slate-50 text-slate-500 text-xs uppercase font-semibold border-b border-slate-200">
+                                    <tr>
+                                        <th className="px-5 py-3.5">Nama Guru / NIP</th>
+                                        <th className="px-5 py-3.5">No. Telepon</th>
+                                        <th className="px-5 py-3.5">Jadwal Hari Piket</th>
+                                        <th className="px-5 py-3.5 text-center">Aksi</th>
+                                    </tr>
+                                </thead>
+                                <tbody className="divide-y divide-slate-100">
+                                    {teachers.map(t => (
+                                        <tr key={t.id} className="hover:bg-slate-50 transition">
+                                            <td className="px-5 py-4">
+                                                <div className="font-bold text-slate-800">{t.name}</div>
+                                                <div className="text-xs text-slate-500">NIP: {t.nip || '-'}</div>
+                                            </td>
+                                            <td className="px-5 py-4 text-slate-600 font-mono text-xs">
+                                                {t.phone || '-'}
+                                            </td>
+                                            <td className="px-5 py-4">
+                                                <div className="flex flex-wrap gap-1.5">
+                                                    {t.schedule.map((sch, idx) => (
+                                                        <span key={idx} className="bg-brand-50 text-brand-800 border border-brand-200 text-xs px-2.5 py-1 rounded-lg font-medium inline-flex items-center space-x-1">
+                                                            <i className="fa-solid fa-calendar-day text-brand-500 text-[10px]"></i>
+                                                            <span><strong>{sch.day}:</strong> {getSlotLabel(sch.startPeriod)} - {getSlotLabel(sch.endPeriod)}</span>
+                                                        </span>
+                                                    ))}
+                                                </div>
+                                            </td>
+                                            <td className="px-5 py-4 text-center">
+                                                <div className="flex items-center justify-center space-x-2">
+                                                    <button
+                                                        onClick={() => openEditModal(t)}
+                                                        className="w-8 h-8 rounded-lg bg-amber-50 text-amber-600 hover:bg-amber-100 border border-amber-200 flex items-center justify-center transition"
+                                                        title="Edit Guru"
+                                                    >
+                                                        <i className="fa-solid fa-pen-to-square text-xs"></i>
+                                                    </button>
+                                                    <button
+                                                        onClick={() => setDeletingTeacher(t)}
+                                                        className="w-8 h-8 rounded-lg bg-rose-50 text-rose-600 hover:bg-rose-100 border border-rose-200 flex items-center justify-center transition"
+                                                        title="Hapus Guru"
+                                                    >
+                                                        <i className="fa-solid fa-trash text-xs"></i>
+                                                    </button>
+                                                </div>
+                                            </td>
+                                        </tr>
+                                    ))}
+                                </tbody>
+                            </table>
+                        </div>
+                    </div>
+
+                    {/* Single Teacher Add/Edit Modal */}
+                    {showModal && (
+                        <div className="fixed inset-0 z-50 bg-slate-900/60 backdrop-blur-sm flex items-center justify-center p-4">
+                            <div className="bg-white rounded-2xl shadow-2xl max-w-lg w-full overflow-hidden animate-in fade-in zoom-in duration-200">
+                                <div className="bg-slate-900 text-white p-5 flex items-center justify-between">
+                                    <h3 className="font-bold text-base">
+                                        {editingTeacher ? 'Edit Data Guru Piket' : 'Tambah Guru Piket Baru'}
+                                    </h3>
+                                    <button onClick={() => setShowModal(false)} className="text-slate-400 hover:text-white">
+                                        <i className="fa-solid fa-times text-lg"></i>
+                                    </button>
+                                </div>
+
+                                <form onSubmit={handleSaveTeacher} className="p-6 space-y-4 max-h-[80vh] overflow-y-auto">
+                                    <div>
+                                        <label className="block text-xs font-bold text-slate-700 uppercase mb-1">Nama Lengkap Guru *</label>
+                                        <input 
+                                            type="text" 
+                                            required 
+                                            placeholder="contoh: Drs. Ahmad Dahlan, M.Pd."
+                                            value={formName}
+                                            onChange={(e) => setFormName(e.target.value)}
+                                            className="w-full px-3 py-2 border border-slate-300 rounded-xl text-sm focus:outline-none focus:ring-2 focus:ring-brand-500"
+                                        />
+                                    </div>
+
+                                    <div className="grid grid-cols-2 gap-3">
+                                        <div>
+                                            <label className="block text-xs font-bold text-slate-700 uppercase mb-1">NIP / NUPTK</label>
+                                            <input 
+                                                type="text" 
+                                                placeholder="19850315..."
+                                                value={formNip}
+                                                onChange={(e) => setFormNip(e.target.value)}
+                                                className="w-full px-3 py-2 border border-slate-300 rounded-xl text-sm focus:outline-none focus:ring-2 focus:ring-brand-500 font-mono"
+                                            />
+                                        </div>
+                                        <div>
+                                            <label className="block text-xs font-bold text-slate-700 uppercase mb-1">No. WhatsApp/HP</label>
+                                            <input 
+                                                type="text" 
+                                                placeholder="0812345..."
+                                                value={formPhone}
+                                                onChange={(e) => setFormPhone(e.target.value)}
+                                                className="w-full px-3 py-2 border border-slate-300 rounded-xl text-sm focus:outline-none focus:ring-2 focus:ring-brand-500"
+                                            />
+                                        </div>
+                                    </div>
+
+                                    {/* Dynamic Schedule Form */}
+                                    <div className="border-t border-slate-200 pt-4">
+                                        <div className="flex items-center justify-between mb-2">
+                                            <label className="block text-xs font-bold text-slate-700 uppercase">Setting Hari & Jam Piket</label>
+                                            <button 
+                                                type="button" 
+                                                onClick={handleAddDaySchedule}
+                                                className="text-xs text-brand-600 hover:text-brand-800 font-bold"
+                                            >
+                                                + Tambah Hari Piket
+                                            </button>
+                                        </div>
+
+                                        <div className="space-y-3">
+                                            {formSchedule.map((sch, idx) => (
+                                                <div key={idx} className="bg-slate-50 p-3 rounded-xl border border-slate-200 flex flex-wrap items-center gap-2">
+                                                    <select 
+                                                        value={sch.day}
+                                                        onChange={(e) => handleScheduleChange(idx, 'day', e.target.value)}
+                                                        className="border border-slate-300 rounded-lg px-2 py-1.5 text-xs font-bold text-slate-800 bg-white"
+                                                    >
+                                                        {DAYS_LIST.map(d => (
+                                                            <option key={d} value={d}>{d}</option>
+                                                        ))}
+                                                    </select>
+
+                                                    <span className="text-xs text-slate-500">Mulai:</span>
+                                                    <select 
+                                                        value={sch.startPeriod}
+                                                        onChange={(e) => handleScheduleChange(idx, 'startPeriod', e.target.value)}
+                                                        className="border border-slate-300 rounded-lg px-2 py-1.5 text-xs font-bold text-slate-800 bg-white"
+                                                    >
+                                                        {DEFAULT_JAM_SLOTS.map(j => (
+                                                            <option key={j.id} value={j.id}>{j.label}</option>
+                                                        ))}
+                                                    </select>
+
+                                                    <span className="text-xs text-slate-500">s/d</span>
+                                                    <select 
+                                                        value={sch.endPeriod}
+                                                        onChange={(e) => handleScheduleChange(idx, 'endPeriod', e.target.value)}
+                                                        className="border border-slate-300 rounded-lg px-2 py-1.5 text-xs font-bold text-slate-800 bg-white"
+                                                    >
+                                                        {DEFAULT_JAM_SLOTS.map(j => (
+                                                            <option key={j.id} value={j.id}>{j.label}</option>
+                                                        ))}
+                                                    </select>
+
+                                                    {formSchedule.length > 1 && (
+                                                        <button 
+                                                            type="button" 
+                                                            onClick={() => handleRemoveDaySchedule(idx)}
+                                                            className="text-rose-600 hover:text-rose-800 ml-auto p-1"
+                                                        >
+                                                            <i className="fa-solid fa-trash-can text-xs"></i>
+                                                        </button>
+                                                    )}
+                                                </div>
+                                            ))}
+                                        </div>
+                                    </div>
+
+                                    <div className="pt-4 border-t border-slate-200 flex justify-end space-x-2">
+                                        <button 
+                                            type="button"
+                                            onClick={() => setShowModal(false)}
+                                            className="px-4 py-2 border border-slate-300 rounded-xl text-xs font-semibold text-slate-600 hover:bg-slate-100"
+                                        >
+                                            Batal
+                                        </button>
+                                        <button 
+                                            type="submit"
+                                            className="px-5 py-2 bg-brand-600 hover:bg-brand-700 text-white rounded-xl text-xs font-bold shadow"
+                                        >
+                                            Simpan Guru
+                                        </button>
+                                    </div>
+                                </form>
+                            </div>
+                        </div>
+                    )}
+
+                    {/* Delete Confirmation Custom Modal */}
+                    {deletingTeacher && (
+                        <div className="fixed inset-0 z-50 bg-slate-900/60 backdrop-blur-sm flex items-center justify-center p-4">
+                            <div className="bg-white rounded-2xl shadow-2xl max-w-md w-full p-6 text-center animate-in fade-in zoom-in duration-200">
+                                <div className="w-16 h-16 bg-rose-100 text-rose-600 rounded-full flex items-center justify-center text-2xl mx-auto mb-4">
+                                    <i className="fa-solid fa-triangle-exclamation"></i>
+                                </div>
+                                <h3 className="text-lg font-bold text-slate-900">Konfirmasi Hapus Guru</h3>
+                                <p className="text-xs text-slate-600 mt-2">
+                                    Apakah Anda yakin ingin menghapus data guru <strong className="text-slate-800">{deletingTeacher.name}</strong>? Tindakan ini tidak dapat dibatalkan.
+                                </p>
+                                <div className="mt-6 flex items-center justify-center space-x-3">
+                                    <button
+                                        onClick={() => setDeletingTeacher(null)}
+                                        className="px-4 py-2 bg-slate-100 hover:bg-slate-200 text-slate-700 text-xs font-bold rounded-xl transition"
+                                    >
+                                        Batal
+                                    </button>
+                                    <button
+                                        onClick={confirmDeleteTeacher}
+                                        className="px-5 py-2 bg-rose-600 hover:bg-rose-700 text-white text-xs font-bold rounded-xl shadow transition"
+                                    >
+                                        Ya, Hapus Data
+                                    </button>
+                                </div>
+                            </div>
+                        </div>
+                    )}
+
+                    {/* Batch Upload Modal */}
+                    {showUploadModal && (
+                        <div className="fixed inset-0 z-50 bg-slate-900/60 backdrop-blur-sm flex items-center justify-center p-4">
+                            <div className="bg-white rounded-2xl shadow-2xl max-w-lg w-full overflow-hidden animate-in fade-in zoom-in duration-200">
+                                <div className="bg-slate-900 text-white p-5 flex items-center justify-between">
+                                    <h3 className="font-bold text-base">Import Batch Data Guru</h3>
+                                    <button onClick={() => setShowUploadModal(false)} className="text-slate-400 hover:text-white">
+                                        <i className="fa-solid fa-times text-lg"></i>
+                                    </button>
+                                </div>
+
+                                <div className="p-6 space-y-4">
+                                    <p className="text-xs text-slate-600 leading-relaxed">
+                                        Paste teks atau data CSV dengan format per baris: <br/>
+                                        <code className="bg-slate-100 p-1 rounded border border-slate-300 font-mono text-[11px] block mt-1">
+                                            Nama Guru, NIP, NoHP, Hari, JamMulai, JamSelesai
+                                        </code>
+                                    </p>
+
+                                    <textarea
+                                        rows="6"
+                                        placeholder={`Contoh:\nDrs. Ahmad Dahlan, 19850315..., 081234567, Sabtu, 0, 8\nSiti Aminah, 19900821..., 082198765, Rabu, 1, 8`}
+                                        value={batchText}
+                                        onChange={(e) => setBatchText(e.target.value)}
+                                        className="w-full p-3 border border-slate-300 rounded-xl text-xs font-mono focus:ring-2 focus:ring-brand-500 focus:outline-none"
+                                    ></textarea>
+
+                                    <div className="flex justify-end space-x-2 pt-2">
+                                        <button
+                                            onClick={() => setShowUploadModal(false)}
+                                            className="px-4 py-2 border border-slate-300 rounded-xl text-xs font-semibold text-slate-600 hover:bg-slate-100"
+                                        >
+                                            Batal
+                                        </button>
+                                        <button
+                                            onClick={handleProcessBatchUpload}
+                                            className="px-5 py-2 bg-emerald-600 hover:bg-emerald-700 text-white rounded-xl text-xs font-bold shadow"
+                                        >
+                                            Proses Import
+                                        </button>
+                                    </div>
+                                </div>
+                            </div>
+                        </div>
+                    )}
+                </div>
+            );
+        }
+
+        function SuratView({ records, teachers, selectedRecord, setSelectedRecord, schoolInfo, formatRupiah }) {
+            const formatDateIndo = (dateStr) => {
+                if (!dateStr) return '-';
+                const parts = dateStr.split('-');
+                if (parts.length !== 3) return dateStr;
+                const months = ['Januari', 'Februari', 'Maret', 'April', 'Mei', 'Juni', 'Juli', 'Agustus', 'September', 'Oktober', 'November', 'Desember'];
+                const monthIdx = parseInt(parts[1], 10) - 1;
+                return `${parseInt(parts[2], 10)} ${months[monthIdx] || ''} ${parts[0]}`;
+            };
+
+            const [selectedTeacherId, setSelectedTeacherId] = useState(() => {
+                if (selectedRecord && selectedRecord.teacherId) return selectedRecord.teacherId;
+                if (teachers.length > 0) return teachers[0].id;
+                if (records.length > 0) return records[0].teacherId;
+                return '';
+            });
+
+            const [periodMode, setPeriodMode] = useState('bulanan');
+
+            const [startDate, setStartDate] = useState(() => {
+                if (selectedRecord && selectedRecord.date) return selectedRecord.date;
+                const now = new Date();
+                const year = now.getFullYear();
+                const month = String(now.getMonth() + 1).padStart(2, '0');
+                return `${year}-${month}-01`;
+            });
+
+            const [endDate, setEndDate] = useState(() => {
+                if (selectedRecord && selectedRecord.date) return selectedRecord.date;
+                const now = new Date();
+                const year = now.getFullYear();
+                const month = now.getMonth();
+                const lastDayNum = new Date(year, month + 1, 0).getDate();
+                const monthStr = String(month + 1).padStart(2, '0');
+                return `${year}-${monthStr}-${String(lastDayNum).padStart(2, '0')}`;
+            });
+
+            useEffect(() => {
+                if (selectedRecord) {
+                    if (selectedRecord.teacherId) setSelectedTeacherId(selectedRecord.teacherId);
+                }
+            }, [selectedRecord]);
+
+            const applyPeriodPreset = (mode) => {
+                setPeriodMode(mode);
+                const now = new Date();
+                const year = now.getFullYear();
+                const month = now.getMonth();
+
+                if (mode === 'bulanan') {
+                    const mStr = String(month + 1).padStart(2, '0');
+                    const firstDay = `${year}-${mStr}-01`;
+                    const lastDayNum = new Date(year, month + 1, 0).getDate();
+                    const lastDay = `${year}-${mStr}-${String(lastDayNum).padStart(2, '0')}`;
+                    setStartDate(firstDay);
+                    setEndDate(lastDay);
+                } else if (mode === 'mingguan') {
+                    const end = new Date();
+                    const start = new Date();
+                    start.setDate(end.getDate() - 6);
+                    setStartDate(start.toISOString().split('T')[0]);
+                    setEndDate(end.toISOString().split('T')[0]);
+                }
+            };
+
+            const currentTeacher = useMemo(() => {
+                const found = teachers.find(t => t.id === selectedTeacherId);
+                if (found) return found;
+                const recFound = records.find(r => r.teacherId === selectedTeacherId);
+                if (recFound) return { name: recFound.teacherName, nip: recFound.teacherNip, phone: '' };
+                return { name: 'Pilih Guru', nip: '-', phone: '-' };
+            }, [teachers, records, selectedTeacherId]);
+
+            const filteredPeriodRecords = useMemo(() => {
+                return records
+                    .filter(r => r.teacherId === selectedTeacherId && r.date >= startDate && r.date <= endDate)
+                    .sort((a, b) => a.date.localeCompare(b.date));
+            }, [records, selectedTeacherId, startDate, endDate]);
+
+            // Helper to get detailed period lists
+            const getPeriodsDetail = (rec) => {
+                const attended = rec.attendedPeriods || [];
+                let missed = rec.missedPeriods;
+                if (!missed) {
+                    const scheduledSlots = getSlotsInRange(rec.startPeriod, rec.endPeriod);
+                    const scheduledIds = scheduledSlots.map(s => String(s.id));
+                    missed = scheduledIds.filter(id => !attended.includes(id));
+                }
+                
+                const attendedLabels = attended.map(getSlotLabel);
+                const missedLabels = missed.map(getSlotLabel);
+
+                return { attendedLabels, missedLabels };
+            };
+
+            const totalScheduledDays = filteredPeriodRecords.length;
+            const totalScheduledHours = filteredPeriodRecords.reduce((sum, r) => sum + r.totalScheduled, 0);
+            const totalAttendedHours = filteredPeriodRecords.reduce((sum, r) => sum + r.totalAttended, 0);
+            const totalMissedHours = filteredPeriodRecords.reduce((sum, r) => sum + r.totalMissed, 0);
+            const totalPeriodInfaq = filteredPeriodRecords.reduce((sum, r) => sum + (r.totalInfaq || 0), 0);
+
+            const handlePrint = () => {
+                window.print();
+            };
+
+            return (
+                <div className="space-y-6">
+                    {/* Controls & Filter Card */}
+                    <div className="bg-white p-5 rounded-2xl border border-slate-200 shadow-sm space-y-4 no-print">
+                        <div className="flex flex-col md:flex-row md:items-center justify-between gap-4">
+                            <div>
+                                <h2 className="text-xl font-bold text-slate-800">Surat Pemberitahuan & Rekapitulasi Periode</h2>
+                                <p className="text-xs text-slate-500 mt-0.5">Atur rekapitulasi kehadiran & kewajiban infaq per individu guru (Mingguan, Bulanan, atau Kustom)</p>
+                            </div>
+
+                            <button
+                                onClick={handlePrint}
+                                className="bg-brand-600 hover:bg-brand-700 text-white font-bold px-4 py-2.5 rounded-xl text-xs shadow transition flex items-center justify-center space-x-2"
+                            >
+                                <i className="fa-solid fa-print text-sm"></i>
+                                <span>Cetak Surat Rekap (PDF / Print)</span>
+                            </button>
+                        </div>
+
+                        {/* Filter Selectors */}
+                        <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-3 bg-slate-50 p-4 rounded-xl border border-slate-200">
+                            <div>
+                                <label className="block text-[11px] font-bold text-slate-600 uppercase mb-1">Pilih Guru Piket</label>
+                                <select
+                                    value={selectedTeacherId}
+                                    onChange={(e) => setSelectedTeacherId(e.target.value)}
+                                    className="w-full px-3 py-2 border border-slate-300 rounded-xl text-xs font-bold text-slate-800 bg-white focus:ring-2 focus:ring-brand-500"
+                                >
+                                    {teachers.length > 0 ? (
+                                        teachers.map(t => (
+                                            <option key={t.id} value={t.id}>{t.name}</option>
+                                        ))
+                                    ) : (
+                                        records.map(r => (
+                                            <option key={r.teacherId} value={r.teacherId}>{r.teacherName}</option>
+                                        ))
+                                    )}
+                                </select>
+                            </div>
+
+                            <div>
+                                <label className="block text-[11px] font-bold text-slate-600 uppercase mb-1">Mode Periode Rekap</label>
+                                <div className="grid grid-cols-3 gap-1 bg-slate-200 p-1 rounded-xl text-xs font-semibold">
+                                    <button
+                                        onClick={() => applyPeriodPreset('mingguan')}
+                                        className={`py-1.5 rounded-lg text-[11px] transition ${periodMode === 'mingguan' ? 'bg-brand-600 text-white font-bold shadow' : 'text-slate-700 hover:text-slate-900'}`}
+                                    >
+                                        Mingguan
+                                    </button>
+                                    <button
+                                        onClick={() => applyPeriodPreset('bulanan')}
+                                        className={`py-1.5 rounded-lg text-[11px] transition ${periodMode === 'bulanan' ? 'bg-brand-600 text-white font-bold shadow' : 'text-slate-700 hover:text-slate-900'}`}
+                                    >
+                                        Bulanan
+                                    </button>
+                                    <button
+                                        onClick={() => setPeriodMode('custom')}
+                                        className={`py-1.5 rounded-lg text-[11px] transition ${periodMode === 'custom' ? 'bg-brand-600 text-white font-bold shadow' : 'text-slate-700 hover:text-slate-900'}`}
+                                    >
+                                        Kustom
+                                    </button>
+                                </div>
+                            </div>
+
+                            <div>
+                                <label className="block text-[11px] font-bold text-slate-600 uppercase mb-1">Tanggal Mulai Rekap</label>
+                                <input
+                                    type="date"
+                                    value={startDate}
+                                    onChange={(e) => {
+                                        setStartDate(e.target.value);
+                                        setPeriodMode('custom');
+                                    }}
+                                    className="w-full px-3 py-1.5 border border-slate-300 rounded-xl text-xs font-bold text-slate-800 bg-white"
+                                />
+                            </div>
+
+                            <div>
+                                <label className="block text-[11px] font-bold text-slate-600 uppercase mb-1">Tanggal Selesai Rekap</label>
+                                <input
+                                    type="date"
+                                    value={endDate}
+                                    onChange={(e) => {
+                                        setEndDate(e.target.value);
+                                        setPeriodMode('custom');
+                                    }}
+                                    className="w-full px-3 py-1.5 border border-slate-300 rounded-xl text-xs font-bold text-slate-800 bg-white"
+                                />
+                            </div>
+                        </div>
+                    </div>
+
+                    {/* Printable Document Preview Area */}
+                    <div className="flex justify-center">
+                        <div id="printable-letter" className="bg-white p-8 sm:p-12 rounded-2xl border border-slate-300 shadow-xl max-w-4xl w-full text-slate-900 font-sans">
+                            {/* Kop Surat Sekolah */}
+                            <div className="border-b-4 border-double border-slate-900 pb-4 mb-6 text-center">
+                                <h2 className="text-xl font-extrabold tracking-wide uppercase text-slate-900">{schoolInfo.name}</h2>
+                                <p className="text-xs text-slate-700 mt-0.5 font-medium">{schoolInfo.address}</p>
+                                <p className="text-[11px] text-slate-600">{schoolInfo.phone}</p>
+                            </div>
+
+                            {/* Letter Subject Header */}
+                            <div className="flex justify-between items-start text-xs mb-6">
+                                <div>
+                                    <table className="text-xs">
+                                        <tbody>
+                                            <tr>
+                                                <td className="pr-3 font-semibold text-slate-700">Nomor Surat</td>
+                                                <td>: 088/REKAP-PIKET/{currentTeacher.nip || 'GURU'}/{startDate.replace(/-/g,'')}</td>
+                                            </tr>
+                                            <tr>
+                                                <td className="pr-3 font-semibold text-slate-700">Lampiran</td>
+                                                <td>: 1 (satu) Berkas Rincian Presensi</td>
+                                            </tr>
+                                            <tr>
+                                                <td className="pr-3 font-semibold text-slate-700">Perihal</td>
+                                                <td>: <strong className="underline">Pemberitahuan Rekapitulasi Kehadiran Piket & Kewajiban Infaq</strong></td>
+                                            </tr>
+                                        </tbody>
+                                    </table>
+                                </div>
+                                <div className="text-right">
+                                    <p className="font-medium text-slate-700">Tanggal Terbit: {formatDateIndo(new Date().toISOString().split('T')[0])}</p>
+                                </div>
+                            </div>
+
+                            {/* Recipient Address */}
+                            <div className="text-xs mb-6 space-y-1">
+                                <p>Kepada Yth.</p>
+                                <p className="font-bold text-sm text-slate-900">{currentTeacher.name}</p>
+                                <p className="text-slate-600">NIP / NUPTK: {currentTeacher.nip || '-'}</p>
+                                <p className="text-slate-600">Di Tempat</p>
+                            </div>
+
+                            {/* Letter Content Body */}
+                            <div className="text-xs leading-relaxed text-slate-800 space-y-3 mb-6">
+                                <p><i>Assalamu’alaikum Warahmatullahi Wabarakatuh,</i></p>
+                                <p>
+                                    Dengan hormat, kami sampaikan rekapitulasi rincian harian akumulasi kehadiran dan ketidakhadiran jam tugas piket Bapak/Ibu guru untuk <strong>Periode Rekapitulasi: {formatDateIndo(startDate)} s/d {formatDateIndo(endDate)}</strong>.
+                                </p>
+
+                                {/* Attendance Detail Table with Exact Period Breakdown */}
+                                <div className="my-4 overflow-hidden border border-slate-300 rounded-lg">
+                                    <table className="w-full text-xs text-left border-collapse">
+                                        <thead className="bg-slate-100 border-b border-slate-300 font-bold text-slate-800">
+                                            <tr>
+                                                <th className="p-2 border-r border-slate-300 text-center w-8">No</th>
+                                                <th className="p-2 border-r border-slate-300">Hari & Tanggal</th>
+                                                <th className="p-2 border-r border-slate-300 text-center">Jadwal Tugas</th>
+                                                <th className="p-2 border-r border-slate-300">Rincian Jam Hadir</th>
+                                                <th className="p-2 border-r border-slate-300">Rincian Jam Kosong / Absen</th>
+                                                <th className="p-2 border-r border-slate-300 text-center">Total (H/K)</th>
+                                                <th className="p-2 border-r border-slate-300 text-right">Infaq Harian</th>
+                                                <th className="p-2">Keterangan</th>
+                                            </tr>
+                                        </thead>
+                                        <tbody className="divide-y divide-slate-200">
+                                            {filteredPeriodRecords.length === 0 ? (
+                                                <tr>
+                                                    <td colSpan="8" className="p-4 text-center text-slate-500 italic">
+                                                        Tidak ada data rekapitulasi kehadiran piket dicatat dalam periode {formatDateIndo(startDate)} s/d {formatDateIndo(endDate)}.
+                                                    </td>
+                                                </tr>
+                                            ) : (
+                                                filteredPeriodRecords.map((rec, idx) => {
+                                                    const { attendedLabels, missedLabels } = getPeriodsDetail(rec);
+                                                    return (
+                                                        <tr key={rec.id} className={rec.totalMissed > 0 ? 'bg-rose-50/30' : 'bg-white'}>
+                                                            <td className="p-2 border-r border-slate-300 text-center font-medium">{idx + 1}</td>
+                                                            <td className="p-2 border-r border-slate-300 font-semibold">{rec.dayName}, {formatDateIndo(rec.date)}</td>
+                                                            <td className="p-2 border-r border-slate-300 text-center font-mono whitespace-nowrap">
+                                                                {getSlotLabel(rec.startPeriod)} - {getSlotLabel(rec.endPeriod)}
+                                                            </td>
+                                                            <td className="p-2 border-r border-slate-300">
+                                                                {attendedLabels.length > 0 ? (
+                                                                    <span className="font-semibold text-emerald-800">
+                                                                        {attendedLabels.join(', ')}
+                                                                    </span>
+                                                                ) : (
+                                                                    <span className="text-slate-400 italic">Nihil</span>
+                                                                )}
+                                                            </td>
+                                                            <td className="p-2 border-r border-slate-300">
+                                                                {missedLabels.length > 0 ? (
+                                                                    <span className="font-semibold text-rose-800">
+                                                                        {missedLabels.join(', ')}
+                                                                    </span>
+                                                                ) : (
+                                                                    <span className="text-emerald-700 italic font-medium">Nihil (Hadir Full)</span>
+                                                                )}
+                                                            </td>
+                                                            <td className="p-2 border-r border-slate-300 text-center font-bold whitespace-nowrap">
+                                                                <span className="text-emerald-700">{rec.totalAttended}H</span> / <span className="text-rose-700">{rec.totalMissed}K</span>
+                                                            </td>
+                                                            <td className="p-2 border-r border-slate-300 text-right font-bold text-slate-800 whitespace-nowrap">
+                                                                {formatRupiah(rec.totalInfaq || 0)}
+                                                            </td>
+                                                            <td className="p-2 text-slate-600 text-[11px]">
+                                                                {rec.notes || (rec.totalMissed === 0 ? 'Hadir Penuh' : '-')}
+                                                            </td>
+                                                        </tr>
+                                                    );
+                                                })
+                                            )}
+                                        </tbody>
+                                    </table>
+                                </div>
+
+                                {/* Summary Box */}
+                                <div className="bg-amber-50 border border-amber-300 rounded-xl p-4 my-4">
+                                    <h4 className="font-bold text-amber-900 text-xs mb-2 uppercase tracking-wider">
+                                        Ringkasan Total Akumulasi Periode ({formatDateIndo(startDate)} - {formatDateIndo(endDate)}):
+                                    </h4>
+                                    <div className="grid grid-cols-2 sm:grid-cols-4 gap-3 text-xs mb-3 border-b border-amber-200 pb-3">
+                                        <div>
+                                            <span className="text-amber-800 text-[11px]">Total Hari Piket:</span>
+                                            <p className="font-bold text-slate-900 text-sm">{totalScheduledDays} Hari</p>
+                                        </div>
+                                        <div>
+                                            <span className="text-amber-800 text-[11px]">Total Jam Terjadwal:</span>
+                                            <p className="font-bold text-slate-900 text-sm">{totalScheduledHours} Jam</p>
+                                        </div>
+                                        <div>
+                                            <span className="text-amber-800 text-[11px]">Total Jam Hadir:</span>
+                                            <p className="font-bold text-emerald-700 text-sm">{totalAttendedHours} Jam</p>
+                                        </div>
+                                        <div>
+                                            <span className="text-amber-800 text-[11px]">Total Jam Kosong:</span>
+                                            <p className="font-bold text-rose-700 text-sm">{totalMissedHours} Jam</p>
+                                        </div>
+                                    </div>
+
+                                    <div className="flex flex-col sm:flex-row items-start sm:items-center justify-between gap-2 pt-1">
+                                        <div>
+                                            <span className="text-xs font-bold text-amber-900 uppercase">Total Kewajiban Infaq Periode Ini:</span>
+                                            <p className="text-[11px] text-amber-700">Dihitung dari {totalMissedHours} jam kosong x nominal tarif infaq</p>
+                                        </div>
+                                        <div className="text-lg sm:text-xl font-extrabold text-rose-700 bg-white px-4 py-1.5 rounded-lg border border-amber-300 shadow-sm">
+                                            {formatRupiah(totalPeriodInfaq)}
+                                        </div>
+                                    </div>
+                                </div>
+
+                                <p>
+                                    Demikian rekapitulasi surat pemberitahuan ini disampaikan sebagai bahan evaluasi, motivasi penegakan disiplin, dan tertib administrasi sekolah. Atas perhatian dan kerja samanya kami ucapkan terima kasih.
+                                </p>
+                                <p><i>Wassalamu’alaikum Warahmatullahi Wabarakatuh.</i></p>
+                            </div>
+
+                            {/* Signatures - Cukup Kepala Sekolah Saja */}
+                            <div className="mt-12 pt-4 flex justify-end text-center text-xs">
+                                <div className="w-64">
+                                    <p className="font-medium text-slate-600">Mengetahui,</p>
+                                    <p className="font-bold text-slate-900">Kepala Sekolah</p>
+                                    <div className="h-20"></div>
+                                    <p className="font-bold underline text-slate-900">{schoolInfo.principalName}</p>
+                                    <p className="text-[11px] text-slate-500">NIP. {schoolInfo.principalNip}</p>
+                                </div>
+                            </div>
+                        </div>
+                    </div>
+                </div>
+            );
+        }
+
+        function PengaturanView({ infaqRate, setInfaqRate, schoolInfo, setSchoolInfo, showNotification, formatRupiah }) {
+            const [rateInput, setRateInput] = useState(infaqRate);
+            const [schoolForm, setSchoolForm] = useState(schoolInfo);
+
+            const handleSaveSettings = (e) => {
+                e.preventDefault();
+                setInfaqRate(Number(rateInput));
+                setSchoolInfo(schoolForm);
+                showNotification('Pengaturan infaq & identitas sekolah berhasil disimpan!');
+            };
+
+            return (
+                <div className="max-w-2xl mx-auto space-y-6">
+                    <div className="bg-white p-5 rounded-2xl border border-slate-200 shadow-sm">
+                        <h2 className="text-xl font-bold text-slate-800">Pengaturan Infaq & Sekolah</h2>
+                        <p className="text-xs text-slate-500 mt-0.5">Konfigurasi nominal infaq per jam dan identitas kearsipan surat sekolah</p>
+                    </div>
+
+                    <form onSubmit={handleSaveSettings} className="bg-white p-6 rounded-2xl border border-slate-200 shadow-sm space-y-6">
+                        <div className="bg-amber-50/70 p-4 rounded-xl border border-amber-200">
+                            <label className="block text-xs font-bold text-amber-900 uppercase tracking-wider mb-1">
+                                Nominal Infaq Ketidakhadiran per Jam (Rp) *
+                            </label>
+                            <p className="text-xs text-amber-700 mb-3">
+                                Tarif ini dikalikan dengan total jam piket yang ditinggalkan / tidak dihadiri oleh guru.
+                            </p>
+                            <div className="relative max-w-xs">
+                                <span className="absolute left-3.5 top-2.5 font-bold text-slate-500 text-sm">Rp</span>
+                                <input 
+                                    type="number"
+                                    required
+                                    min="0"
+                                    step="500"
+                                    value={rateInput}
+                                    onChange={(e) => setRateInput(e.target.value)}
+                                    className="w-full pl-10 pr-4 py-2 border border-slate-300 rounded-xl font-bold text-slate-800 focus:ring-2 focus:ring-brand-500 focus:outline-none"
+                                />
+                            </div>
+                            <p className="text-xs font-semibold text-amber-800 mt-2">
+                                Pratinjau Contoh: 5 jam tidak hadir = <strong>{formatRupiah(rateInput * 5)}</strong>
+                            </p>
+                        </div>
+
+                        <div className="space-y-4">
+                            <h3 className="text-sm font-bold text-slate-800 border-b border-slate-200 pb-2">Identitas Kearsipan Surat Sekolah</h3>
+
+                            <div>
+                                <label className="block text-xs font-semibold text-slate-700 mb-1">Nama Instansi / Sekolah</label>
+                                <input 
+                                    type="text" 
+                                    value={schoolForm.name}
+                                    onChange={(e) => setSchoolForm({ ...schoolForm, name: e.target.value })}
+                                    className="w-full px-3 py-2 border border-slate-300 rounded-xl text-sm focus:ring-2 focus:ring-brand-500 focus:outline-none"
+                                />
+                            </div>
+
+                            <div>
+                                <label className="block text-xs font-semibold text-slate-700 mb-1">Alamat Lengkap</label>
+                                <input 
+                                    type="text" 
+                                    value={schoolForm.address}
+                                    onChange={(e) => setSchoolForm({ ...schoolForm, address: e.target.value })}
+                                    className="w-full px-3 py-2 border border-slate-300 rounded-xl text-sm focus:ring-2 focus:ring-brand-500 focus:outline-none"
+                                />
+                            </div>
+
+                            <div>
+                                <label className="block text-xs font-semibold text-slate-700 mb-1">Kontak / Email / Telepon Kop Surat</label>
+                                <input 
+                                    type="text" 
+                                    value={schoolForm.phone}
+                                    onChange={(e) => setSchoolForm({ ...schoolForm, phone: e.target.value })}
+                                    className="w-full px-3 py-2 border border-slate-300 rounded-xl text-sm focus:ring-2 focus:ring-brand-500 focus:outline-none"
+                                />
+                            </div>
+
+                            <div className="grid grid-cols-2 gap-3 pt-2">
+                                <div>
+                                    <label className="block text-xs font-semibold text-slate-700 mb-1">Nama Kepala Sekolah</label>
+                                    <input 
+                                        type="text" 
+                                        value={schoolForm.principalName}
+                                        onChange={(e) => setSchoolForm({ ...schoolForm, principalName: e.target.value })}
+                                        className="w-full px-3 py-2 border border-slate-300 rounded-xl text-sm focus:ring-2 focus:ring-brand-500 focus:outline-none"
+                                    />
+                                </div>
+                                <div>
+                                    <label className="block text-xs font-semibold text-slate-700 mb-1">NIP Kepala Sekolah</label>
+                                    <input 
+                                        type="text" 
+                                        value={schoolForm.principalNip}
+                                        onChange={(e) => setSchoolForm({ ...schoolForm, principalNip: e.target.value })}
+                                        className="w-full px-3 py-2 border border-slate-300 rounded-xl text-sm focus:ring-2 focus:ring-brand-500 focus:outline-none font-mono"
+                                    />
+                                </div>
+                            </div>
+                        </div>
+
+                        <div className="pt-4 flex justify-end">
+                            <button
+                                type="submit"
+                                className="bg-brand-600 hover:bg-brand-700 text-white font-bold px-6 py-2.5 rounded-xl text-sm shadow transition flex items-center space-x-2"
+                            >
+                                <i className="fa-solid fa-floppy-disk"></i>
+                                <span>Simpan Seluruh Pengaturan</span>
+                            </button>
+                        </div>
+                    </form>
+                </div>
+            );
+        }
+
+        const root = ReactDOM.createRoot(document.getElementById('root'));
+        root.render(<App />);
+    </script>
+</body>
+</html>
